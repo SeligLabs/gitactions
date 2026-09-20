@@ -1,0 +1,260 @@
+name: Release Notes
+description:
+  Writes release notes for a tag, summarised by Claude or GitHub's generated
+  notes when no summary is available.
+author: Selig Labs, Inc <info@seliglabs.com>
+
+inputs:
+  ANTHROPIC_API_KEY:
+    description:
+      An Anthropic API key. Leave unset to skip the summary and take GitHub's
+      generated notes instead.
+    required: false
+    default: ""
+
+  TAG:
+    description: The tag being released, e.g. v1.4.0.
+    required: true
+
+  PREVIOUS_TAG:
+    description:
+      The tag to write notes from, exclusive. Leave unset to cover the whole
+      history, which is what a first release wants.
+    required: false
+    default: ""
+
+  COMPARE_BASE:
+    description:
+      Base URL for the full-changelog link appended to a Claude summary, e.g.
+      https://github.com/owner/repo/compare. Omit to append no link. Not used
+      for generated notes, which carry their own.
+    required: false
+    default: ""
+
+  MODEL:
+    description: The Claude model to summarise with.
+    required: false
+    default: claude-opus-5
+
+  PROJECT_DESCRIPTION:
+    description:
+      What the project is, in a few words, so the summary is written in the
+      right register. Reaches the model verbatim.
+    required: false
+    default: a software project
+
+  MAX_WORDS:
+    description: Upper bound on the length of a Claude summary.
+    required: false
+    default: "200"
+
+  FALLBACK:
+    description:
+      Whether to fall back to GitHub's generated notes when no summary is
+      produced. Set to "false" to leave the notes empty instead.
+    required: false
+    default: "true"
+
+  GITHUB_TOKEN:
+    description: Token used to request GitHub's generated notes.
+    required: false
+    default: ${{ github.token }}
+
+  NOTES_FILE:
+    description:
+      Where to write the notes. Defaults to a file in the runner's temp
+      directory.
+    required: false
+    default: ""
+
+outputs:
+  NOTES_FILE:
+    description:
+      Path to the notes. Always written, and is a placeholder when SOURCE
+      is "none" so it can be passed straight to `gh release create
+      --notes-file` with no guard.
+    value: ${{ steps.notes.outputs.NOTES_FILE }}
+
+  SOURCE:
+    description: >-
+      Where the notes came from: "claude" for a summary, "github" for
+      generated notes, or "none" if neither was available.
+    value: ${{ steps.notes.outputs.SOURCE }}
+
+runs:
+  using: composite
+  steps:
+    # Needs the history the range covers: check out with fetch-depth: 0, or
+    # git log has nothing to summarise.
+    - name: Write Release Notes
+      id: notes
+      shell: bash
+      env:
+        ANTHROPIC_API_KEY: ${{ inputs.ANTHROPIC_API_KEY }}
+        TAG: ${{ inputs.TAG }}
+        PREVIOUS_TAG: ${{ inputs.PREVIOUS_TAG }}
+        COMPARE_BASE: ${{ inputs.COMPARE_BASE }}
+        MODEL: ${{ inputs.MODEL }}
+        PROJECT_DESCRIPTION: ${{ inputs.PROJECT_DESCRIPTION }}
+        MAX_WORDS: ${{ inputs.MAX_WORDS }}
+        FALLBACK: ${{ inputs.FALLBACK }}
+        NOTES_TOKEN: ${{ inputs.GITHUB_TOKEN }}
+        NOTES_FILE_IN: ${{ inputs.NOTES_FILE }}
+      run: |
+        set -uo pipefail
+
+        NOTES_FILE="$NOTES_FILE_IN"
+        [[ -z "$NOTES_FILE" ]] && NOTES_FILE="${RUNNER_TEMP:-/tmp}/release-notes.md"
+
+        # Release notes are a nicety, never a gate: every path below exits 0 so
+        # a summary can never fail a release. The trap records the outcome
+        # exactly once.
+        SOURCE=none
+        finish() {
+          # NOTES_FILE is always left usable, so a caller can hand it to
+          # `--notes-file` unconditionally. Without this, the one path where
+          # neither source produces anything would fail the release *after*
+          # the tag had already been pushed.
+          if ! grep -q '[^[:space:]]' "$NOTES_FILE" 2>/dev/null; then
+            {
+              echo "_No release notes were generated._"
+              if [[ -n "$COMPARE_BASE" && -n "$PREVIOUS_TAG" ]]; then
+                echo
+                echo "[Full changelog]($COMPARE_BASE/$PREVIOUS_TAG...$TAG)"
+              fi
+            } > "$NOTES_FILE"
+          fi
+
+          echo "SOURCE=$SOURCE" >> "$GITHUB_OUTPUT"
+          echo "NOTES_FILE=$NOTES_FILE" >> "$GITHUB_OUTPUT"
+        }
+        trap finish EXIT
+
+        # GitHub's own generated notes, the same list `gh release create
+        # --generate-notes` produces, fetched through the API so the caller
+        # gets a usable file either way and needs no fallback branch.
+        generated_notes() {
+          [[ "$FALLBACK" == "true" ]] || return 1
+          [[ -n "$NOTES_TOKEN" ]] || { echo "::warning::No token for generated notes."; return 1; }
+
+          local payload response
+          payload=$(jq -n --arg tag "$TAG" --arg prev "$PREVIOUS_TAG" \
+            '{tag_name: $tag} + (if $prev == "" then {} else {previous_tag_name: $prev} end)')
+
+          response=$(curl -sS --max-time 60 -X POST \
+            "${GITHUB_API_URL:-https://api.github.com}/repos/$GITHUB_REPOSITORY/releases/generate-notes" \
+            -H "authorization: Bearer $NOTES_TOKEN" \
+            -H "accept: application/vnd.github+json" \
+            -H "content-type: application/json" \
+            -d "$payload") || return 1
+
+          printf '%s' "$response" | jq -r '.body // empty' > "$NOTES_FILE"
+          grep -q '[^[:space:]]' "$NOTES_FILE" 2>/dev/null || return 1
+        }
+
+        # Every give-up path lands here, so the fallback is attempted once and
+        # in one place rather than at each early return.
+        skip() {
+          echo "$1"
+          if generated_notes; then
+            SOURCE=github
+            echo "Using GitHub's generated notes."
+          fi
+          exit 0
+        }
+
+        if [[ -z "$ANTHROPIC_API_KEY" ]]; then
+          skip "ANTHROPIC_API_KEY is not set — skipping the summary."
+        fi
+
+        RANGE="HEAD"
+        [[ -n "$PREVIOUS_TAG" ]] && RANGE="$PREVIOUS_TAG..HEAD"
+
+        COMMITS=$(git log --no-merges --pretty=format:'- %s' "$RANGE")
+        if [[ -z "$COMMITS" ]]; then
+          skip "No commits in $RANGE — skipping the summary."
+        fi
+        FILES=$(git diff --stat "$RANGE" | tail -n 40)
+
+        # Placeholders rather than an expanding heredoc: the description is
+        # caller-supplied, and must not be read as shell or as a printf format.
+        read -r -d '' TEMPLATE <<'PROMPT' || true
+        Write the release notes for __PROJECT__. The audience is the small team
+        that works on it.
+
+        Rules:
+        - Lead with what changed for someone using the project, not with file
+          names or internal symbols.
+        - Group related items under short "### " headings, but only where a
+          heading covers more than one item. A small release is a plain list.
+        - Leave out dependency bumps, formatting, lockfile churn and version
+          bumps unless there is nothing else in the release.
+        - No preamble, no sign-off, no heading naming the version.
+        - Plain GitHub-flavoured markdown, __WORDS__ words at most.
+        - If the release is genuinely trivial, say so in one line.
+        PROMPT
+
+        INSTRUCTIONS=${TEMPLATE//__PROJECT__/$PROJECT_DESCRIPTION}
+        INSTRUCTIONS=${INSTRUCTIONS//__WORDS__/$MAX_WORDS}
+
+        PROMPT_TEXT=$(printf '%s\n\nCommits:\n%s\n\nFiles changed:\n%s\n' \
+          "$INSTRUCTIONS" "$COMMITS" "$FILES")
+
+        # jq builds the body so commit subjects containing quotes, backticks,
+        # command substitutions or newlines cannot break the request.
+        BODY=$(jq -n --arg model "$MODEL" --arg prompt "$PROMPT_TEXT" '{
+          model: $model,
+          max_tokens: 2000,
+          fallbacks: "default",
+          messages: [{role: "user", content: $prompt}]
+        }')
+
+        RESPONSE=$(curl -sS --max-time 300 https://api.anthropic.com/v1/messages \
+          -H "x-api-key: $ANTHROPIC_API_KEY" \
+          -H "anthropic-version: 2023-06-01" \
+          -H "anthropic-beta: server-side-fallback-2026-07-01" \
+          -H "content-type: application/json" \
+          -d "$BODY")
+
+        if [[ -z "$RESPONSE" ]]; then
+          skip "::warning::No response from the Claude API."
+        fi
+
+        ERROR=$(printf '%s' "$RESPONSE" | jq -r 'if .type == "error" then .error.message else empty end')
+        if [[ -n "$ERROR" ]]; then
+          skip "::warning::Claude API error: $ERROR"
+        fi
+
+        # A refusal returns HTTP 200 with no usable text, so check it too.
+        STOP=$(printf '%s' "$RESPONSE" | jq -r '.stop_reason // empty')
+        if [[ "$STOP" == "refusal" ]]; then
+          skip "::warning::Claude declined to summarise this release."
+        fi
+
+        # Text blocks only: thinking blocks are present but carry no copy.
+        printf '%s' "$RESPONSE" \
+          | jq -r '[.content[]? | select(.type == "text") | .text] | join("")' \
+          > "$NOTES_FILE"
+
+        # Not -s alone: jq emits a trailing newline even when it joins an empty
+        # list, so a response carrying no text block still produces a 1-byte
+        # file. Require an actual non-whitespace character.
+        if ! grep -q '[^[:space:]]' "$NOTES_FILE" 2>/dev/null; then
+          skip "::warning::Claude returned no text."
+        fi
+
+        if [[ -n "$COMPARE_BASE" && -n "$PREVIOUS_TAG" ]]; then
+          {
+            echo
+            echo "---"
+            echo "[Full changelog]($COMPARE_BASE/$PREVIOUS_TAG...$TAG)"
+          } >> "$NOTES_FILE"
+        fi
+
+        SOURCE=claude
+        echo "Wrote release notes to $NOTES_FILE:"
+        cat "$NOTES_FILE"
+
+branding:
+  icon: file-text
+  color: blue
