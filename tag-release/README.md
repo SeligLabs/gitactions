@@ -56,12 +56,12 @@ It also adds a short "Release" section to the job summary.
 
 [`.github/workflows/sanity-vercel.yml`](../.github/workflows/sanity-vercel.yml) is the full pipeline for monorepos built on SeligLabs/template-website, as a reusable workflow:
 
-1. **Verify:** checks the Sanity types are fresh, then lint, type-check and test.
+1. **Verify:** checks the Sanity types are fresh, then runs lint, type-check and test in one parallel turbo run. turbo's cache is kept between runs, and PR runs are cancelled by a newer push.
 2. **Version:** keeps the root version if its tag is free, otherwise runs `pnpm version:patch` and commits the bump.
 3. **Deploy:** runs each app's `deploy:prod` in parallel.
 4. **Release:** runs this action.
 
-Version, deploy and release run only on a push to the default branch. Setting `release: false` turns them off, which suits a template repository.
+Every job installs through [`pnpm-install`](../pnpm-install), which skips `pnpm install` on a cache hit, and has a time limit. Version, deploy and release run only on a push to the default branch. Setting `release: false` turns them off, which suits a template repository.
 
 ```yaml
 name: Deploy Project

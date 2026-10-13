@@ -1,0 +1,58 @@
+name: pnpm Install
+description:
+  Sets up Node and pnpm, then restores the workspace's node_modules from cache,
+  installing only when the lockfile or Node version changed.
+author: Selig Labs, Inc <info@seliglabs.com>
+
+inputs:
+  NODE_VERSION_FILE:
+    description: File holding the Node version.
+    required: false
+    default: .nvmrc
+
+outputs:
+  CACHE_HIT:
+    description: '"true" when node_modules came from the cache and install was skipped.'
+    value: ${{ steps.restore.outputs.cache-hit }}
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Node
+      uses: actions/setup-node@v7
+      with:
+        node-version-file: ${{ inputs.NODE_VERSION_FILE }}
+
+    - name: Setup pnpm
+      uses: pnpm/action-setup@v6
+
+    # The whole installed tree, not the pnpm store: a hit skips `pnpm install`
+    # entirely. Keyed on what changes what install produces. Not package.json:
+    # its version field changes on every release, and the lockfile already
+    # records every dependency change.
+    - name: Restore node_modules
+      id: restore
+      uses: actions/cache/restore@v6
+      with:
+        path: |
+          node_modules
+          apps/*/node_modules
+          packages/*/node_modules
+        key: node-modules-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles(inputs.NODE_VERSION_FILE, 'pnpm-lock.yaml', 'pnpm-workspace.yaml') }}
+
+    - name: Install Dependencies
+      if: steps.restore.outputs.cache-hit != 'true'
+      shell: bash
+      run: pnpm install --frozen-lockfile
+
+    # Saved straight after install rather than at the end of the job, so jobs
+    # running alongside, and later runs, get it even if this job then fails.
+    - name: Save node_modules
+      if: steps.restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v6
+      with:
+        path: |
+          node_modules
+          apps/*/node_modules
+          packages/*/node_modules
+        key: ${{ steps.restore.outputs.cache-primary-key }}
