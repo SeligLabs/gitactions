@@ -1,0 +1,98 @@
+# Releases this repository. Every push to main that changes an action or a
+# reusable workflow cuts the next patch (v1.1.0 -> v1.1.1), with notes from this
+# repository's own tag-release, then moves the major tag (v1) to it, which is
+# what callers pin. Run it by hand for a minor or major release; a major
+# release starts a new major tag (v2) and leaves v1 where it is.
+
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+    # Docs alone don't change what callers run.
+    paths-ignore:
+      - "**.md"
+      - LICENSE
+      - .gitignore
+      - .github/workflows/release.yml
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Which part of the version to advance.
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+        default: patch
+
+# One release at a time, and never cancelled: each push gets its version.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Tag & Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Resolve Version
+        id: version
+        env:
+          BUMP: ${{ inputs.bump || 'patch' }}
+        run: |
+          set -euo pipefail
+
+          # Full versions only: the moving major tags (v1) aren't releases.
+          PREVIOUS=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1)
+          if [[ -z "$PREVIOUS" ]]; then
+            echo "::error::No vX.Y.Z tag to advance from."
+            exit 1
+          fi
+
+          IFS=. read -r MAJOR MINOR PATCH <<< "${PREVIOUS#v}"
+          case "$BUMP" in
+            major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+            minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+            *)     PATCH=$((PATCH + 1)) ;;
+          esac
+
+          {
+            echo "tag=v$MAJOR.$MINOR.$PATCH"
+            echo "major=v$MAJOR"
+            echo "previous=$PREVIOUS"
+          } >> "$GITHUB_OUTPUT"
+          echo "Releasing v$MAJOR.$MINOR.$PATCH (previous: $PREVIOUS)"
+
+      # The checked-out copy rather than @v1, so a change to tag-release is
+      # exercised by its own release.
+      - name: Tag & Release
+        uses: ./tag-release
+        with:
+          TAG: ${{ steps.version.outputs.tag }}
+          PREVIOUS_TAG: ${{ steps.version.outputs.previous }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          PROJECT_DESCRIPTION: >-
+            a collection of reusable GitHub Actions and workflows (release
+            notes, tagging and releases, cached pnpm installs, and a full
+            Sanity + Vercel pipeline) used across several repositories, which
+            pin them by major tag
+
+      - name: Move Major Tag
+        env:
+          MAJOR: ${{ steps.version.outputs.major }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git tag -f "$MAJOR" "$TAG"
+          git push -f origin "refs/tags/$MAJOR"
+          echo "- **Callers:** \`@$MAJOR\` now runs \`$TAG\`." >> "$GITHUB_STEP_SUMMARY"
