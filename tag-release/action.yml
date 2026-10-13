@@ -1,0 +1,177 @@
+name: Tag & Release
+description: Tags the checked-out commit and creates a GitHub release with notes
+  summarised by Claude, falling back to GitHub's generated notes. Safe to
+  re-run, since a tag or release that already exists is left as it is.
+author: Selig Labs, Inc <info@seliglabs.com>
+
+inputs:
+  TAG:
+    description: The tag to create, e.g. v1.4.0 or v1.4.0+12.
+    required: true
+
+  TITLE:
+    description: The release title. Defaults to the tag.
+    required: false
+    default: ""
+
+  PREVIOUS_TAG:
+    description:
+      The tag to write notes from, exclusive. Leave unset to take the newest
+      other tag matching TAG_PATTERN; with none, the whole history is covered.
+    required: false
+    default: ""
+
+  TAG_PATTERN:
+    description:
+      Glob for the tags that count as releases when looking up PREVIOUS_TAG.
+      Narrow enough to skip hand-made or legacy tags.
+    required: false
+    default: v[0-9]*
+
+  ANTHROPIC_API_KEY:
+    description: An Anthropic API key. Leave unset to use GitHub's generated notes.
+    required: false
+    default: ""
+
+  PROJECT_DESCRIPTION:
+    description:
+      What the project is, in a few words, so the summary is written in the
+      right register.
+    required: false
+    default: a software project
+
+  MODEL:
+    description: The Claude model to summarise with.
+    required: false
+    default: claude-opus-5
+
+  GITHUB_TOKEN:
+    description: Token used to push the tag and create the release.
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  CREATED:
+    description: '"true" when this run created the tag or the release.'
+    value: ${{ steps.finish.outputs.CREATED }}
+
+  URL:
+    description: The release's URL.
+    value: ${{ steps.finish.outputs.URL }}
+
+  SOURCE:
+    description:
+      Where the notes came from ("claude", "github" or "none"), or empty when
+      the release already existed.
+    value: ${{ steps.notes.outputs.SOURCE }}
+
+runs:
+  using: composite
+  steps:
+    # The previous tag is looked up before the new one exists, so it can never
+    # be the tag itself, and before anything is pushed, so a re-run sees the
+    # same answer.
+    - name: Check State
+      id: state
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.GITHUB_TOKEN }}
+        TAG: ${{ inputs.TAG }}
+        PREVIOUS_TAG: ${{ inputs.PREVIOUS_TAG }}
+        TAG_PATTERN: ${{ inputs.TAG_PATTERN }}
+      run: |
+        set -euo pipefail
+
+        if [[ "$(git rev-parse --is-shallow-repository)" == "true" ]]; then
+          echo "::error::Check out with fetch-depth: 0 — the notes need the history and tags."
+          exit 1
+        fi
+
+        if [[ -z "$PREVIOUS_TAG" ]]; then
+          PREVIOUS_TAG=$(git tag --list "$TAG_PATTERN" --sort=-creatordate \
+            | grep -vxF -- "$TAG" | head -n1 || true)
+        fi
+        echo "previous-tag=$PREVIOUS_TAG" >> "$GITHUB_OUTPUT"
+
+        if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+          echo "tag-exists=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "tag-exists=false" >> "$GITHUB_OUTPUT"
+        fi
+
+        if gh release view "$TAG" >/dev/null 2>&1; then
+          echo "release-exists=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "release-exists=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Create Tag
+      if: steps.state.outputs.tag-exists == 'false'
+      shell: bash
+      env:
+        TAG: ${{ inputs.TAG }}
+      run: |
+        set -euo pipefail
+        git tag "$TAG"
+        git push origin "refs/tags/$TAG"
+
+    - name: Write Release Notes
+      id: notes
+      if: steps.state.outputs.release-exists == 'false'
+      uses: SeligLabs/gitactions/release-notes@v1
+      with:
+        ANTHROPIC_API_KEY: ${{ inputs.ANTHROPIC_API_KEY }}
+        TAG: ${{ inputs.TAG }}
+        PREVIOUS_TAG: ${{ steps.state.outputs.previous-tag }}
+        COMPARE_BASE: ${{ github.server_url }}/${{ github.repository }}/compare
+        PROJECT_DESCRIPTION: ${{ inputs.PROJECT_DESCRIPTION }}
+        MODEL: ${{ inputs.MODEL }}
+        GITHUB_TOKEN: ${{ inputs.GITHUB_TOKEN }}
+
+    - name: Create Release
+      if: steps.state.outputs.release-exists == 'false'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.GITHUB_TOKEN }}
+        TAG: ${{ inputs.TAG }}
+        TITLE: ${{ inputs.TITLE || inputs.TAG }}
+        NOTES_FILE: ${{ steps.notes.outputs.NOTES_FILE }}
+      run: |
+        set -euo pipefail
+        gh release create "$TAG" --verify-tag --title "$TITLE" --notes-file "$NOTES_FILE"
+
+    - name: Summary
+      id: finish
+      shell: bash
+      env:
+        TAG: ${{ inputs.TAG }}
+        TITLE: ${{ inputs.TITLE || inputs.TAG }}
+        TAG_EXISTS: ${{ steps.state.outputs.tag-exists }}
+        RELEASE_EXISTS: ${{ steps.state.outputs.release-exists }}
+        SOURCE: ${{ steps.notes.outputs.SOURCE }}
+      run: |
+        set -euo pipefail
+
+        # "+" (semver build metadata) must be escaped in the URL path.
+        URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/${TAG//+/%2B}"
+        echo "URL=$URL" >> "$GITHUB_OUTPUT"
+
+        if [[ "$TAG_EXISTS" == "true" && "$RELEASE_EXISTS" == "true" ]]; then
+          echo "CREATED=false" >> "$GITHUB_OUTPUT"
+        else
+          echo "CREATED=true" >> "$GITHUB_OUTPUT"
+        fi
+
+        {
+          echo "## Release"
+          echo "- **Release:** [$TITLE]($URL)"
+          if [[ "$RELEASE_EXISTS" == "true" ]]; then
+            echo "- **Note:** \`$TAG\` was already released; nothing was changed."
+          else
+            case "$SOURCE" in
+              claude) echo "- **Notes:** summarised by Claude." ;;
+              github) echo "- **Notes:** GitHub's generated notes (no \`ANTHROPIC_API_KEY\`, or the summary failed — see the log)." ;;
+              *)      echo "- **Notes:** none could be produced — see the log." ;;
+            esac
+          fi
+        } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,289 @@
+# Verify, version, deploy and release a Sanity + Next.js monorepo built on
+# SeligLabs/template-website: pnpm workspaces, apps/<project> each with a
+# `deploy:prod` script, Sanity types generated into packages/sanity-types, and
+# the version bumped by `pnpm version:patch`.
+#
+# Verify runs on every call. Version, deploy and release run only for a push
+# to the repository's default branch, and only when `release` is true.
+#
+# The caller grants `contents: write` (the version job pushes a bump commit,
+# the release job a tag) and passes the secrets below by name: `inherit`
+# only reaches a workflow in the same organization.
+
+name: Sanity + Vercel
+
+on:
+  workflow_call:
+    inputs:
+      project-description:
+        description: What the project is, in a few words, for the release notes.
+        type: string
+        required: true
+      projects:
+        description: JSON array of the apps/* folders to deploy, in parallel.
+        type: string
+        default: '["studio", "web"]'
+      tag-pattern:
+        description:
+          Glob for the tags that count as releases. Narrow enough to skip
+          hand-made or legacy tags.
+        type: string
+        default: v[0-9]*
+      release:
+        description:
+          Whether a push to the default branch versions, deploys and releases.
+          False runs verify alone, e.g. for a template repository.
+        type: boolean
+        default: true
+    secrets:
+      SANITY_AUTH_TOKEN:
+        required: false
+      VERCEL_TOKEN:
+        required: false
+      SENTRY_AUTH_TOKEN:
+        required: false
+      ANTHROPIC_API_KEY:
+        required: false
+
+jobs:
+  setup:
+    name: Setup Monorepo
+    runs-on: ubuntu-latest
+    outputs:
+      pnpm-cache-key: ${{ steps.cache-key.outputs.cache-key }}
+      pnpm-store-path: ${{ steps.store-path.outputs.store-path }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Get Cache Key
+        id: cache-key
+        run: echo "cache-key=pnpm-store-${{ hashFiles('pnpm-lock.yaml') }}" >> "$GITHUB_OUTPUT"
+
+      - name: Get pnpm Store Path
+        id: store-path
+        run: echo "store-path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache pnpm Store
+        uses: actions/cache@v6
+        with:
+          path: ${{ steps.store-path.outputs.store-path }}
+          key: ${{ steps.cache-key.outputs.cache-key }}
+
+      - name: Install Dependencies
+        run: pnpm install --frozen-lockfile
+
+  verify:
+    name: Lint & Test
+    runs-on: ubuntu-latest
+    needs: setup
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Restore pnpm Cache
+        uses: actions/cache@v6
+        with:
+          path: ${{ needs.setup.outputs.pnpm-store-path }}
+          key: ${{ needs.setup.outputs.pnpm-cache-key }}
+
+      - name: Install Dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Schema extraction and typegen are entirely local — no Sanity API token
+      # needed. This fails if the committed types drift from the schema.
+      - name: Verify Sanity Types Are Fresh
+        run: |
+          pnpm --filter studio typegen
+          git diff --exit-code packages/sanity-types/
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Check Types
+        run: pnpm check-types
+
+      - name: Test
+        run: pnpm test
+
+  version:
+    name: Version
+    runs-on: ubuntu-latest
+    needs: verify
+    if: >-
+      inputs.release && github.event_name == 'push' &&
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    permissions:
+      contents: write
+    # Two pushes landing together must not both try to claim a version and
+    # push to the default branch. Serialize rather than cancel: a queued run
+    # still deploys.
+    concurrency:
+      group: version-${{ github.event.repository.default_branch }}
+      cancel-in-progress: false
+    outputs:
+      sha: ${{ steps.commit.outputs.sha }}
+      tag: ${{ steps.resolve.outputs.tag }}
+      bumped: ${{ steps.resolve.outputs.bumped }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # Only to run `pnpm version:patch` below — this job installs no
+      # dependencies, and the bump script has none.
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Resolve Version
+        id: resolve
+        # pnpm 11+ installs dependencies before any `pnpm run` whose
+        # node_modules is missing or stale. The bump script needs none.
+        env:
+          pnpm_config_verify_deps_before_run: false
+        run: |
+          set -euo pipefail
+
+          VERSION=$(node -p "require('./package.json').version")
+
+          # A version whose tag is still free was bumped deliberately (including
+          # major and minor versions). Therefore take it as authored. Otherwise
+          # advance the patch through `pnpm version:patch`, the same entry point
+          # a developer uses, so there is one definition of a bump and the root
+          # version and every packages/* version move in lockstep. It loops rather
+          # than bumping once so a deleted tag, or a version edited backwards,
+          # can not result in tagging a name that is already taken.
+          BUMPED=false
+          while git rev-parse "refs/tags/v$VERSION" >/dev/null 2>&1; do
+            pnpm version:patch
+            VERSION=$(node -p "require('./package.json').version")
+            BUMPED=true
+          done
+
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+          echo "bumped=$BUMPED" >> "$GITHUB_OUTPUT"
+          echo "Releasing v$VERSION (auto-bumped: $BUMPED)"
+
+      - name: Commit Version Bump
+        id: commit
+        env:
+          TAG: ${{ steps.resolve.outputs.tag }}
+          BUMPED: ${{ steps.resolve.outputs.bumped }}
+          BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$BUMPED" == "true" ]]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add package.json packages/*/package.json
+            # Pushes made with GITHUB_TOKEN do not start new workflow runs, so
+            # this cannot loop; [skip ci] is a second belt for anything that
+            # watches the branch with a different credential.
+            # --no-verify: this job installs no dependencies, so husky's hooks
+            # are not wired up here — but if an install step is ever added, the
+            # pre-commit hook would run lint-staged and the suite again for a
+            # commit that only changes version fields.
+            git commit --no-verify -m "chore(release): $TAG [skip ci]"
+            git push origin "HEAD:$BRANCH"
+          fi
+
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    name: Deploy ${{ matrix.project }}
+    runs-on: ubuntu-latest
+    needs: [setup, version]
+    strategy:
+      matrix:
+        project: ${{ fromJSON(inputs.projects) }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v7
+        with:
+          # The version bump commit, so the build carries the version it is
+          # about to be tagged with. Bare checkout would resolve github.sha,
+          # which is the commit from before the bump.
+          ref: ${{ needs.version.outputs.sha }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Restore pnpm Cache
+        uses: actions/cache@v6
+        with:
+          path: ${{ needs.setup.outputs.pnpm-store-path }}
+          key: ${{ needs.setup.outputs.pnpm-cache-key }}
+
+      - name: Install Dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Deploy Project
+        run: pnpm run deploy:prod
+        working-directory: ./apps/${{ matrix.project }}
+        env:
+          SANITY_AUTH_TOKEN: ${{ secrets.SANITY_AUTH_TOKEN }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+
+  release:
+    name: Tag & Release
+    runs-on: ubuntu-latest
+    needs: [version, deploy]
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v7
+        with:
+          # Tag the commit that was actually deployed, and keep full history so
+          # the release notes can diff against the previous tag.
+          ref: ${{ needs.version.outputs.sha }}
+          fetch-depth: 0
+
+      - name: Tag & Release
+        uses: SeligLabs/gitactions/tag-release@v1
+        with:
+          TAG: ${{ needs.version.outputs.tag }}
+          TAG_PATTERN: ${{ inputs.tag-pattern }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          PROJECT_DESCRIPTION: ${{ inputs.project-description }}
+
+      - name: Version Summary
+        env:
+          TAG: ${{ needs.version.outputs.tag }}
+          BUMPED: ${{ needs.version.outputs.bumped }}
+          BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          if [[ "$BUMPED" == "true" ]]; then
+            echo "- **Version:** patch auto-advanced to \`$TAG\` and committed to \`$BRANCH\`." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "- **Version:** \`$TAG\` was set by hand; used as authored." >> "$GITHUB_STEP_SUMMARY"
+          fi
