@@ -39,7 +39,7 @@ jobs:
 | `TAG_PATTERN`         | Glob for the tags that count as releases when looking up `PREVIOUS_TAG`. Keep it narrow enough to skip hand-made or legacy tags. | No       | `v[0-9]*`             |
 | `ANTHROPIC_API_KEY`   | An Anthropic API key, as a secret. Unset means GitHub's generated notes are used.                                                | No       | `""`                  |
 | `PROJECT_DESCRIPTION` | What the project is, in a few words, so the summary is written in the right register.                                            | No       | `a software project`  |
-| `MODEL`               | The Claude model to summarise with.                                                                                              | No       | `claude-opus-5`       |
+| `MODEL`               | The Claude model to summarise with.                                                                                              | No       | `claude-opus-5-5`     |
 | `GITHUB_TOKEN`        | Token used to push the tag and create the release.                                                                               | No       | `${{ github.token }}` |
 
 ### Outputs

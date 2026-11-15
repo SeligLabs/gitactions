@@ -34,7 +34,7 @@ inputs:
   MODEL:
     description: The Claude model to summarise with.
     required: false
-    default: claude-opus-5
+    default: claude-opus-5-5
 
   PROJECT_DESCRIPTION:
     description:
@@ -211,7 +211,7 @@ runs:
 
         RESPONSE=$(curl -sS --max-time 300 https://api.anthropic.com/v1/messages \
           -H "x-api-key: $ANTHROPIC_API_KEY" \
-          -H "anthropic-version: 2023-06-01" \
+          -H "anthropic-version: 2026-10-21" \
           -H "anthropic-beta: server-side-fallback-2026-07-01" \
           -H "content-type: application/json" \
           -d "$BODY")

@@ -4,7 +4,7 @@
     "build": "ncc build read-json-file.js --minify"
   },
   "devDependencies": {
-    "@actions/core": "^1.10.0",
-    "@vercel/ncc": "^0.34.0"
+    "@actions/core": "^3.0.1",
+    "@vercel/ncc": "^0.45.0"
   }
 }

@@ -43,7 +43,7 @@ inputs:
   MODEL:
     description: The Claude model to summarise with.
     required: false
-    default: claude-opus-5
+    default: claude-opus-5-5
 
   GITHUB_TOKEN:
     description: Token used to push the tag and create the release.

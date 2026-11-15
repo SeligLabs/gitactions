@@ -1,5 +1,5 @@
 import fs from 'fs';
-const core = require('@actions/core');
+import * as core from '@actions/core';
 
 /**
  * Read package.json file

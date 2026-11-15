@@ -52,7 +52,7 @@ Example workflow steps:
 
 ```yaml
 - name: checkout dist
-  uses: actions/checkout@master
+  uses: actions/checkout@v7
   with:
     ref: dist
     # need at least 2 here so we can get a proper log in next step
