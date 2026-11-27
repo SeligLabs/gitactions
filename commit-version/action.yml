@@ -1,0 +1,68 @@
+name: Commit Version
+description: Writes a release's version into the repository and commits it to
+  the branch, releasing only the branch's newest commit. Safe to re-run.
+author: Selig Labs, Inc <info@seliglabs.com>
+
+inputs:
+  TAG:
+    description: The release being cut, e.g. v1.4.0.
+    required: true
+
+  FILES:
+    description: The files the version is written to, space-separated; globs work.
+    required: true
+
+  COMMAND:
+    description:
+      A shell command that writes the version into FILES. It runs only when
+      this run is the one to release. Leave unset if an earlier step wrote it.
+    required: false
+    default: ""
+
+  BRANCH:
+    description: The branch to commit to.
+    required: false
+    default: ${{ github.event.repository.default_branch }}
+
+  MESSAGE:
+    description: The commit message. Defaults to "chore(release) TAG [skip ci]".
+    required: false
+    default: ""
+
+  NO_VERIFY:
+    description: '"true" to skip git hooks on the commit.'
+    required: false
+    default: "true"
+
+outputs:
+  RELEASE:
+    description:
+      '"true" when this run should go on to tag and release; "false" when the
+      branch has moved on and a newer run will.'
+    value: ${{ steps.commit.outputs.RELEASE }}
+
+  COMMITTED:
+    description: '"true" when this run pushed a version commit.'
+    value: ${{ steps.commit.outputs.COMMITTED }}
+
+  SHA:
+    description: The commit to tag, now checked out.
+    value: ${{ steps.commit.outputs.SHA }}
+
+runs:
+  using: composite
+  steps:
+    - id: commit
+      shell: bash
+      run: $GITHUB_ACTION_PATH/commit-version.sh
+      env:
+        TAG: ${{ inputs.TAG }}
+        FILES: ${{ inputs.FILES }}
+        COMMAND: ${{ inputs.COMMAND }}
+        BRANCH: ${{ inputs.BRANCH }}
+        MESSAGE: ${{ inputs.MESSAGE }}
+        NO_VERIFY: ${{ inputs.NO_VERIFY }}
+
+branding:
+  icon: git-commit
+  color: blue

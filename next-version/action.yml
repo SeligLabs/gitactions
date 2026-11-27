@@ -1,0 +1,48 @@
+name: Next Version
+description: Works out the next vX.Y.Z release from the repository's newest tag
+  of that shape, advancing the patch, minor or major part.
+author: Selig Labs, Inc <info@seliglabs.com>
+
+inputs:
+  BUMP:
+    description: Which part to advance, patch, minor or major.
+    required: false
+    default: patch
+
+  INITIAL:
+    description:
+      The version to advance from when no vX.Y.Z tag exists yet, e.g. v0.0.0.
+      Leave unset to fail instead.
+    required: false
+    default: ""
+
+outputs:
+  TAG:
+    description: The next tag, e.g. v1.4.0.
+    value: ${{ steps.next.outputs.TAG }}
+
+  VERSION:
+    description: The next version without the v, e.g. 1.4.0.
+    value: ${{ steps.next.outputs.VERSION }}
+
+  MAJOR:
+    description: Its major tag, e.g. v1.
+    value: ${{ steps.next.outputs.MAJOR }}
+
+  PREVIOUS:
+    description: The tag it advanced from, or empty when it started from INITIAL.
+    value: ${{ steps.next.outputs.PREVIOUS }}
+
+runs:
+  using: composite
+  steps:
+    - id: next
+      shell: bash
+      run: $GITHUB_ACTION_PATH/next-version.sh
+      env:
+        BUMP: ${{ inputs.BUMP }}
+        INITIAL: ${{ inputs.INITIAL }}
+
+branding:
+  icon: hash
+  color: blue
