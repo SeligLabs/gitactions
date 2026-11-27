@@ -9,7 +9,7 @@ It caches the installed tree rather than the pnpm store, so a hit skips the inst
 ```yaml
 steps:
   - uses: actions/checkout@v7
-  - uses: SeligLabs/gitactions/pnpm-install@v1
+  - uses: SeligLabs/actionKit/pnpm-install@v1
   - run: pnpm test
 ```
 

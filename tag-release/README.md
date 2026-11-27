@@ -22,7 +22,7 @@ jobs:
           fetch-depth: 0
 
       - name: Tag & Release
-        uses: SeligLabs/gitactions/tag-release@v1
+        uses: SeligLabs/actionKit/tag-release@v1
         with:
           TAG: v${{ steps.version.outputs.version }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -75,7 +75,7 @@ on:
 
 jobs:
   pipeline:
-    uses: SeligLabs/gitactions/.github/workflows/sanity-vercel.yml@v1
+    uses: SeligLabs/actionKit/.github/workflows/sanity-vercel.yml@v1
     permissions:
       contents: write
     secrets:

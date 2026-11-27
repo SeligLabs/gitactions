@@ -23,7 +23,7 @@ jobs:
 
       - name: Write Release Notes
         id: notes
-        uses: SeligLabs/gitactions/release-notes@v1
+        uses: SeligLabs/actionKit/release-notes@v1
         with:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           TAG: v1.4.0

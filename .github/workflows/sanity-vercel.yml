@@ -66,7 +66,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Install
-        uses: SeligLabs/gitactions/pnpm-install@v1
+        uses: SeligLabs/actionKit/pnpm-install@v1
 
       # Keyed per commit and restored from the newest earlier entry, so each
       # run starts from the last run's results and saves its own.
@@ -197,7 +197,7 @@ jobs:
           ref: ${{ needs.version.outputs.sha }}
 
       - name: Install
-        uses: SeligLabs/gitactions/pnpm-install@v1
+        uses: SeligLabs/actionKit/pnpm-install@v1
 
       - name: Deploy Project
         run: pnpm run deploy:prod
@@ -224,7 +224,7 @@ jobs:
           fetch-depth: 0
 
       - name: Tag & Release
-        uses: SeligLabs/gitactions/tag-release@v1
+        uses: SeligLabs/actionKit/tag-release@v1
         with:
           TAG: ${{ needs.version.outputs.tag }}
           TAG_PATTERN: ${{ inputs.tag-pattern }}

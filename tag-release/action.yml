@@ -118,7 +118,7 @@ runs:
     - name: Write Release Notes
       id: notes
       if: steps.state.outputs.release-exists == 'false'
-      uses: SeligLabs/gitactions/release-notes@v1
+      uses: SeligLabs/actionKit/release-notes@v1
       with:
         ANTHROPIC_API_KEY: ${{ inputs.ANTHROPIC_API_KEY }}
         TAG: ${{ inputs.TAG }}

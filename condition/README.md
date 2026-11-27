@@ -23,7 +23,7 @@ outputs:
 
 ```yaml
 steps:
-- uses: SeligLabs/gitactions/condition@main
+- uses: SeligLabs/actionKit/condition@main
   id: condition
   with:
     condition: ${{ inputs.OVERRIDE == 'some value' }}
