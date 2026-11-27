@@ -114,5 +114,4 @@ runner and requires the following additional tools:
 - tr
 - date
 
-Please ensure that they are available on your system or use V1 of the action,
-which executes within a docker container.
+Please ensure that they are available on your system.

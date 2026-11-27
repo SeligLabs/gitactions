@@ -21,4 +21,4 @@ Checks: in `condition/` and in `read-json-file/`, `corepack yarn@1.22.22 install
 
 ## Log
 
-- 2026-11-27: routine (the `release-notes` README example now shows `actions/checkout@v7`); nothing else was behind in range. Security: jq 1.6 → 1.8.2 in `invalidate-cloudfront/invalidate.sh`, past the 20 advisories filed against 1.8.1 and older (three high: GHSA-cfh2-vwfq-qfmm, GHSA-wwj8-gxm6-jc29, GHSA-q3h9-m34w-h76f) and the ones fixed in 1.8.0 and 1.8.1.
+- 2026-11-27: routine (the `release-notes` README example now shows `actions/checkout@v7`); nothing else was behind in range. Security: jq 1.6 → 1.8.2 in `invalidate-cloudfront/invalidate.sh`, past the 20 advisories filed against 1.8.1 and older (three high: GHSA-cfh2-vwfq-qfmm, GHSA-wwj8-gxm6-jc29, GHSA-q3h9-m34w-h76f) and the ones fixed in 1.8.0 and 1.8.1. Removed the two Dockerfiles nothing used (`invalidate-cloudfront/`, `s3-deploy/`): their base, `pahud/awscli:with-bash`, was last pushed in 2019 and has no newer tag.
