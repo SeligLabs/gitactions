@@ -50,17 +50,17 @@ if [ "$DEBUG" = "1" ]; then
   set -x
 fi
 
-# Ensure we have jq-1.6
+# Ensure we have jq-1.8.2
 jq="jq"
-if  [[ ! -x "$(command -v $jq)" || "$($jq --version)" != "jq-1.6" ]]; then
+if  [[ ! -x "$(command -v $jq)" || "$($jq --version)" != "jq-1.8.2" ]]; then
   if [[ $(uname) == "Darwin" ]]; then
     jqbin="jq-osx-amd64"
   elif [[ $(uname) == "Linux" ]]; then
     jqbin="jq-linux64"
   fi
   if [[ -n "$jqbin" ]]; then
-    jq="/usr/local/bin/jq16"
-    wget -O $jq https://github.com/stedolan/jq/releases/download/jq-1.6/$jqbin
+    jq="/usr/local/bin/jq182"
+    wget -O $jq https://github.com/jqlang/jq/releases/download/jq-1.8.2/$jqbin
     chmod 755 $jq
   fi
 fi
